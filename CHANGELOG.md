@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added a Saved notes library from the hub gear menu with search, preview, restore, and delete actions for minimized groups, stash entries, and presets.
+- Added named minimized note groups so open notes can be saved, closed from the desktop, and restored later without replacing notes that are already open.
+- Added note titlebar controls for minimize, maximize/restore, and close, with a setting to hide those controls for cleaner label-style notes.
+- Added automatic minimize naming from the note text and smarter close behavior that skips the save prompt when a restored saved note has not changed.
+- Added Windows taskbar Jump List support for restoring saved note groups from the pinned app menu.
+- Added black paper app icon assets and PyInstaller packaging support for Windows shortcut and Jump List metadata.
+
 ## v1.1.5 - 2026-05-16
 
 - Added a Windows global `Ctrl+Alt+Shift+T` recovery hotkey for disabling click-through when the hub is not focused.

@@ -1,1 +1,2 @@
 Pillow>=10.0
+pywin32>=311; platform_system == "Windows"

@@ -1,13 +1,23 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
+win32com_hiddenimports = collect_submodules("win32com")
 
 a = Analysis(
     ["labels.py"],
     pathex=[],
     binaries=[],
-    datas=[],
-    hiddenimports=["PIL.ImageGrab", "PIL.ImageTk"],
+    datas=[("assets", "assets")] + collect_data_files("win32com"),
+    hiddenimports=[
+        "PIL.ImageGrab",
+        "PIL.ImageTk",
+        "pythoncom",
+        "pywintypes",
+        "win32com.shell.shell",
+        "win32com.propsys.propsys",
+        "win32com.propsys.pscon",
+    ] + win32com_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -27,6 +37,7 @@ exe = EXE(
     exclude_binaries=True,
     name="ScrollyPollyNotely",
     debug=False,
+    icon="assets/black-paper.ico",
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
