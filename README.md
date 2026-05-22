@@ -7,6 +7,8 @@ Scrolly Polly Notely is a small Windows-friendly floating notes app built with P
 Use it for:
 
 - Floating always-on-top notes.
+- Saving open notes into named groups and restoring them later from the app.
+- Quickly reopening saved note groups from the Windows taskbar Jump List.
 - Optional clipboard capture via `send_label.ps1`; you run it when you want to send the current clipboard to a new note.
 - Checklists, colors, fonts, opacity, resizing, stash, presets, and pasted images.
 - Local-only note storage under `%APPDATA%\ScrollyPollyNotely`.
@@ -53,9 +55,12 @@ You can drag the hub from the blank strip or from the `+`, gear, and `x` control
 
 - Drag a note to move it.
 - Drag the bottom-right corner of a note to make it bigger or smaller.
+- Use the note titlebar controls to minimize a note into saved notes, maximize or restore the note size, or close the note.
 - Double-click a note to edit its text.
 - While editing a note, right-click the text area for `Cut`, `Copy`, `Paste`, and `Select all`.
 - Right-click a pasted image for image resize and delete actions.
+- Use the hub gear menu's `Saved notes...` action to search, preview, restore, or delete saved notes, minimized groups, stash entries, and presets.
+- Use the hub right-click menu's `Minimized` submenu to save all currently open notes as a named group or restore/delete existing minimized groups.
 - If click-through is enabled on a note, use the hub right-click menu to disable click-through on all notes.
 - While the app is focused, `Ctrl+Shift+T` also disables click-through on all notes.
 - On Windows, `Ctrl+Alt+Shift+T` is registered as a global recovery hotkey while the app is running. It only disables click-through on all notes and lifts the hub; it does not read keys or send data anywhere.
@@ -79,6 +84,19 @@ Use `Font family...` on a note to pick from installed system fonts. Use `Default
 
 `Click-through` makes a note ignore mouse clicks so you can interact with windows behind it. The app shows a first-time warning before enabling it because a click-through note cannot be dragged or closed directly until click-through is disabled from the hub or keyboard shortcut.
 
+`Show window controls` can be turned off from a note's right-click menu when you want a cleaner label with no minimize, maximize, or close controls. The gear menu also includes `Default: show window controls` for new notes.
+
+## Saved Notes
+
+The app has two saved-note flows:
+
+- `Minimized` saves open notes as a restorable work group and removes them from the desktop.
+- `Saved notes...` opens a library view where saved groups, stash entries, and presets can be searched, previewed, restored, or deleted.
+
+Restoring a saved group adds those notes beside whatever is already open. It does not delete the saved group, so the same group can be restored again later.
+
+On Windows, pinned app Jump Lists can show saved note groups under `Saved notes`. Choosing one starts the app if needed and restores that group.
+
 ## Checklists
 
 Checklist lines use plain text syntax:
@@ -99,7 +117,7 @@ Your notes and pasted images are stored outside the project folder:
 %APPDATA%\ScrollyPollyNotely\pasted-images\
 ```
 
-That keeps downloaded code separate from each user's private notes.
+That keeps downloaded code separate from each user's private notes. Saved groups, minimized notes, stash entries, presets, and note settings all stay in the same local settings file; the app does not add cloud storage or telemetry.
 
 For testing or portable use, set `SCROLLY_POLLY_NOTELY_DATA_DIR` before launching:
 
