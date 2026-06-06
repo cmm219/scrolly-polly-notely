@@ -760,7 +760,15 @@ class StickyLabel:
         self._render_titlebar_controls()
 
     def _request_close(self):
-        if not self.label.get("1.0", "end-1c").strip() and not self._images:
+        # Treat an empty note as throwaway: never prompt to save it. When the
+        # note is being edited, inspect the live entry (text + uncommitted
+        # images) instead of the not-yet-updated label.
+        if self._entry is not None:
+            text_segments, image_records = _extract_image_records(self._entry)
+            has_content = bool("".join(text_segments).strip()) or bool(image_records)
+        else:
+            has_content = bool(self.label.get("1.0", "end-1c").strip()) or bool(self._images)
+        if not has_content:
             self._close()
             return
         if self.is_clean_saved():
@@ -1166,21 +1174,25 @@ class StickyLabel:
         for img_frame in self._image_frames:
             photo_by_name[str(img_frame._photo)] = img_frame._photo
 
+        frame_by_name = {str(f): f for f in self._image_frames}
+        img_iter = iter(self._images)
         for item_type, value, index in self.label.dump("1.0", "end", all=True):
             if item_type == "image" and value in photo_by_name:
-                for img_dict in self._images:
-                    if self._image_name_map.get(value) is None:
-                        self._image_name_map[value] = img_dict
-                        break
+                # Raw image embeds carry no back-reference; pair them with
+                # self._images in document order (matches insertion order).
+                img_dict = next(img_iter, None)
+                if img_dict is not None:
+                    self._image_name_map[value] = img_dict
             elif item_type == "window":
-                for img_frame in self._image_frames:
-                    if str(img_frame) == value:
-                        tcl_name = str(img_frame._photo)
-                        for img_dict in self._images:
-                            if self._image_name_map.get(tcl_name) is None:
-                                self._image_name_map[tcl_name] = img_dict
-                                break
-                        break
+                frame = frame_by_name.get(value)
+                if frame is not None:
+                    tcl_name = str(frame._photo)
+                    # Each frame knows its own dict; never guess from index 0.
+                    img_dict = getattr(frame, "_img_dict", None)
+                    if img_dict is None:
+                        img_dict = next(img_iter, None)
+                    if img_dict is not None:
+                        self._image_name_map[tcl_name] = img_dict
 
         self.label.pack_forget()
         self._entry = tk.Text(
@@ -1658,7 +1670,7 @@ class LabelManager:
         self.add_btn = tk.Label(self.frame, text=" + ", bg=bg, fg=fg,
                                 font=("Consolas", 12, "bold"), padx=6, pady=2, cursor="hand2")
         self.add_btn.pack(side="left")
-        self._bind_hub_button(self.add_btn, lambda e: self.spawn_label())
+        self._bind_hub_button(self.add_btn, lambda e: self.new_note())
 
         self.settings_btn = tk.Label(self.frame, text=" \u2699 ", bg=bg, fg=fg,
                                      font=("Consolas", 12), padx=6, pady=2, cursor="hand2")
@@ -1680,8 +1692,8 @@ class LabelManager:
         self.frame.bind("<B1-Motion>", self._on_drag)
 
         # Plus key hotkey to create new label
-        self.root.bind("<plus>", lambda e: self.spawn_label())
-        self.root.bind("<KP_Add>", lambda e: self.spawn_label())
+        self.root.bind("<plus>", lambda e: self.new_note())
+        self.root.bind("<KP_Add>", lambda e: self.new_note())
         self.root.bind_all("<Control-Shift-T>", lambda e: self._disable_all_clickthrough())
         self.root.bind_all("<Control-Shift-t>", lambda e: self._disable_all_clickthrough())
 
@@ -1822,7 +1834,8 @@ class LabelManager:
     def spawn_label(self, text="Label", x=None, y=None, bg=None, fg=None,
                     transparent=None, font_size=None, width=None, height=None,
                     clickthrough=False, ontop=True, images=None, opacity=None,
-                    font_family=None, show_window_controls=None):
+                    font_family=None, show_window_controls=None,
+                    start_in_edit=False):
         if x is None:
             x = self.root.winfo_x() + 50
         if y is None:
@@ -1834,7 +1847,15 @@ class LabelManager:
                             images=images, opacity=opacity,
                             show_window_controls=show_window_controls)
         self.labels.append(label)
+        if start_in_edit:
+            # Open immediately in edit mode with a blinking caret so the user
+            # can type right after pressing + (no double-click / select needed).
+            label._start_edit(None)
         return label
+
+    def new_note(self):
+        """Interactive new note: empty, opened in edit mode, caret ready."""
+        return self.spawn_label(text="", start_in_edit=True)
 
     def _spawn_from_data(self, d):
         label = self.spawn_label(
