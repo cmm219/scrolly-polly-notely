@@ -1504,5 +1504,70 @@ class TestMultiImagePersistence(unittest.TestCase):
         restored.win.destroy()
 
 
+class TestNewNoteEditMode(unittest.TestCase):
+    """BEHAVIOR 2: pressing + spawns an empty note already in edit mode."""
+
+    def setUp(self):
+        import labels
+        self.labels = labels
+        root = get_root()
+        self.mgr = labels.LabelManager.__new__(labels.LabelManager)
+        self.mgr.config = labels.load_config()
+        self.mgr.labels = []
+        self.mgr.root = root
+        self.mgr.frame = tk.Frame(root)
+
+    def tearDown(self):
+        for lbl in self.mgr.labels[:]:
+            if lbl.win.winfo_exists():
+                lbl.win.destroy()
+
+    def test_new_note_opens_in_edit_mode_empty(self):
+        lbl = self.mgr.new_note()
+        self.assertIsNotNone(lbl._entry, "new note should open directly in edit mode")
+        self.assertEqual(lbl._entry.get("1.0", "end-1c").strip(), "")
+
+    def test_spawn_label_without_flag_does_not_edit(self):
+        lbl = self.mgr.spawn_label(text="hi", x=0, y=0)
+        self.assertIsNone(lbl._entry, "ordinary spawn should not enter edit mode")
+
+
+class TestEmptyNoteClose(unittest.TestCase):
+    """BEHAVIOR 3: closing an empty note never prompts to save."""
+
+    def setUp(self):
+        import labels
+        self.labels = labels
+        root = get_root()
+        self.mgr = labels.LabelManager.__new__(labels.LabelManager)
+        self.mgr.config = labels.load_config()
+        self.mgr.labels = []
+        self.mgr.root = root
+        self.mgr.frame = tk.Frame(root)
+
+    def tearDown(self):
+        for lbl in self.mgr.labels[:]:
+            if lbl.win.winfo_exists():
+                lbl.win.destroy()
+
+    def test_new_empty_note_closes_without_prompt(self):
+        import unittest.mock as mock
+        lbl = self.mgr.new_note()
+        with mock.patch("labels.messagebox.askyesnocancel") as prompt:
+            lbl._request_close()
+        prompt.assert_not_called()
+        self.assertFalse(lbl.win.winfo_exists(), "empty note should close")
+
+    def test_nonempty_unsaved_note_still_prompts(self):
+        import unittest.mock as mock
+        lbl = self.labels.StickyLabel(self.mgr, text="keep me", x=0, y=0)
+        self.mgr.labels.append(lbl)
+        with mock.patch("labels.messagebox.askyesnocancel", return_value=None) as prompt:
+            lbl._request_close()
+        prompt.assert_called_once()
+        self.assertTrue(lbl.win.winfo_exists(), "cancel should keep the note open")
+        lbl.win.destroy()
+
+
 if __name__ == "__main__":
     unittest.main()
