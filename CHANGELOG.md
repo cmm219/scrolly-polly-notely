@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed multi-photo notes so pasted images stay distinct after edit cycles, restart, and reload.
+- Changed the `+` action to open a blank note directly in edit mode, and made empty notes close without a save prompt.
 - Added a Saved notes library from the hub gear menu with search, preview, restore, and delete actions for minimized groups, stash entries, and presets.
 - Added named minimized note groups so open notes can be saved, closed from the desktop, and restored later without replacing notes that are already open.
 - Added note titlebar controls for minimize, maximize/restore, and close, with a setting to hide those controls for cleaner label-style notes.
