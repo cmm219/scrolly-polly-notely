@@ -1410,5 +1410,99 @@ class TestChecklist(unittest.TestCase):
         lbl.win.destroy()
 
 
+class TestMultiImagePersistence(unittest.TestCase):
+    """Regression: multiple pasted images must stay distinct across edit cycles
+    and snapshot round-trips. Previously they all collapsed to the first image
+    because _start_edit rebuilt the name map by always grabbing _images[0]."""
+
+    def setUp(self):
+        import labels
+        self.labels = labels
+        root = get_root()
+        self.mgr = labels.LabelManager.__new__(labels.LabelManager)
+        self.mgr.config = labels.load_config()
+        self.mgr.labels = []
+        self.mgr.root = root
+        self.mgr.frame = tk.Frame(root)
+        labels._ensure_image_dir()
+        self._cleanup_paths = []
+
+    def tearDown(self):
+        for p in self._cleanup_paths:
+            try:
+                if p and os.path.exists(p):
+                    os.remove(p)
+            except OSError:
+                pass
+
+    def _paste_distinct(self, lbl, colors):
+        from PIL import Image as PilImage
+        import unittest.mock as mock
+        for color in colors:
+            fake_img = PilImage.new("RGB", (40, 25), color=color)
+            with mock.patch("labels.ImageGrab.grabclipboard", return_value=fake_img):
+                lbl._paste_image(None)
+
+    def _record_paths(self, lbl):
+        paths = []
+        for d in lbl._images:
+            for key in ("path", "original_path"):
+                p = d.get(key, "")
+                if p:
+                    self._cleanup_paths.append(p)
+            paths.append(d.get("path", ""))
+        return paths
+
+    def test_three_images_stay_distinct_after_edit_cycle(self):
+        try:
+            from PIL import Image as PilImage  # noqa: F401
+        except ImportError:
+            self.skipTest("Pillow not installed")
+        lbl = self.labels.StickyLabel(self.mgr, text="", x=0, y=0)
+        lbl._start_edit(None)
+        self._paste_distinct(lbl, [(255, 0, 0), (0, 255, 0), (0, 0, 255)])
+        lbl._finish_edit(None)
+        first_paths = self._record_paths(lbl)
+        self.assertEqual(len(first_paths), 3)
+        self.assertEqual(len(set(first_paths)), 3, "images collapsed on first commit")
+
+        # Re-enter edit: this rebuilds _image_name_map (the buggy path) and
+        # re-embeds on finish. Distinct images must survive the round trip.
+        lbl._start_edit(None)
+        # Every distinct image dict must be mapped, not just _images[0].
+        mapped = list(lbl._image_name_map.values())
+        mapped_ids = {id(d) for d in mapped}
+        self.assertEqual(len(mapped_ids), 3, "name map collapsed to a single image")
+        lbl._finish_edit(None)
+        second_paths = self._record_paths(lbl)
+        self.assertEqual(second_paths, first_paths, "images changed after edit cycle")
+        self.assertEqual(len(set(second_paths)), 3, "images collapsed after re-edit")
+        lbl.win.destroy()
+
+    def test_two_images_distinct_after_snapshot_round_trip(self):
+        try:
+            from PIL import Image as PilImage  # noqa: F401
+        except ImportError:
+            self.skipTest("Pillow not installed")
+        lbl = self.labels.StickyLabel(self.mgr, text="", x=0, y=0)
+        lbl._start_edit(None)
+        self._paste_distinct(lbl, [(200, 10, 10), (10, 10, 200)])
+        lbl._finish_edit(None)
+        orig_paths = self._record_paths(lbl)
+        self.assertEqual(len(set(orig_paths)), 2)
+
+        # Simulate shutdown/reload: snapshot then respawn from that data.
+        data = lbl.snapshot()
+        lbl.win.destroy()
+        self.mgr._spawn_from_data(data)
+        restored = self.mgr.labels[-1]
+        restored_paths = [d.get("path", "") for d in restored._images]
+        self.assertEqual(len(restored_paths), 2)
+        self.assertEqual(len(set(restored_paths)), 2,
+                         "images collapsed to one after reload")
+        self.assertEqual(sorted(restored_paths), sorted(orig_paths))
+        restored.win.destroy()
+
+
 if __name__ == "__main__":
     unittest.main()

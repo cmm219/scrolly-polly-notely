@@ -1166,21 +1166,25 @@ class StickyLabel:
         for img_frame in self._image_frames:
             photo_by_name[str(img_frame._photo)] = img_frame._photo
 
+        frame_by_name = {str(f): f for f in self._image_frames}
+        img_iter = iter(self._images)
         for item_type, value, index in self.label.dump("1.0", "end", all=True):
             if item_type == "image" and value in photo_by_name:
-                for img_dict in self._images:
-                    if self._image_name_map.get(value) is None:
-                        self._image_name_map[value] = img_dict
-                        break
+                # Raw image embeds carry no back-reference; pair them with
+                # self._images in document order (matches insertion order).
+                img_dict = next(img_iter, None)
+                if img_dict is not None:
+                    self._image_name_map[value] = img_dict
             elif item_type == "window":
-                for img_frame in self._image_frames:
-                    if str(img_frame) == value:
-                        tcl_name = str(img_frame._photo)
-                        for img_dict in self._images:
-                            if self._image_name_map.get(tcl_name) is None:
-                                self._image_name_map[tcl_name] = img_dict
-                                break
-                        break
+                frame = frame_by_name.get(value)
+                if frame is not None:
+                    tcl_name = str(frame._photo)
+                    # Each frame knows its own dict; never guess from index 0.
+                    img_dict = getattr(frame, "_img_dict", None)
+                    if img_dict is None:
+                        img_dict = next(img_iter, None)
+                    if img_dict is not None:
+                        self._image_name_map[tcl_name] = img_dict
 
         self.label.pack_forget()
         self._entry = tk.Text(
