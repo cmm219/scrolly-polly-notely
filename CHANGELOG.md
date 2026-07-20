@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.2.0 - 2026-07-20
 
 - Fixed multi-photo notes so pasted images stay distinct after edit cycles, restart, and reload.
 - Changed the `+` action to open a blank note directly in edit mode, and made empty notes close without a save prompt.
