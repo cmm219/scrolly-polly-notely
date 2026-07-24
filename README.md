@@ -1,8 +1,12 @@
 # Scrolly Polly Notely
 
-[![CI](https://github.com/cmm219/scrolly-polly-notely/actions/workflows/ci.yml/badge.svg)](https://github.com/cmm219/scrolly-polly-notely/actions/workflows/ci.yml)
+[![CI](https://github.com/cmm219/scrolly-polly-notely/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/cmm219/scrolly-polly-notely/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/cmm219/scrolly-polly-notely)](https://github.com/cmm219/scrolly-polly-notely/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
+[![Platform: Windows](https://img.shields.io/badge/platform-windows-lightgrey)](#install)
 
-Scrolly Polly Notely is a small Windows-friendly floating notes app built with Python and Tkinter. It keeps quick notes on top of your desktop with no installer, no account, no cloud sync, and no telemetry.
+Scrolly Polly Notely is a small Windows floating notes app built with Python and Tkinter. It keeps quick notes on top of your desktop with no installer, no account, no cloud sync, and no telemetry.
 
 Use it for:
 
@@ -15,7 +19,7 @@ Use it for:
 
 ## Status
 
-Current release: [latest](https://github.com/cmm219/scrolly-polly-notely/releases/latest). The app is intentionally small and local-first.
+Shipped and maintained. Eight tagged releases to date; see [the latest release](https://github.com/cmm219/scrolly-polly-notely/releases/latest) and [CHANGELOG.md](CHANGELOG.md). The test suite is **99 tests**, run on Windows in CI for every push and pull request. The app is intentionally small and local-first.
 
 ## Screenshots
 
@@ -27,20 +31,29 @@ Current release: [latest](https://github.com/cmm219/scrolly-polly-notely/release
 
 ## Install
 
-### Run From Source
+Windows only. Requires **Python 3.11 or newer** from [python.org](https://www.python.org/downloads/). Releases are tagged source snapshots; there is no prebuilt installer to download.
 
-1. Install Python 3.11 or newer from [python.org](https://www.python.org/downloads/).
-2. Download this project from GitHub as a ZIP, or clone it with Git.
-3. Open PowerShell in the project folder.
-4. Install the image dependency:
+### From a tagged release (recommended)
+
+1. Download the source ZIP for the [latest release](https://github.com/cmm219/scrolly-polly-notely/releases/latest) and unpack it.
+2. Open PowerShell in the unpacked folder.
+3. Install the image dependency:
 
 ```powershell
 python -m pip install -r requirements.txt
 ```
 
+### From the main branch
+
+```powershell
+git clone https://github.com/cmm219/scrolly-polly-notely.git
+cd scrolly-polly-notely
+python -m pip install -r requirements.txt
+```
+
 ### Build A Portable Windows App
 
-For a portable `.exe` build, see [docs/PACKAGING.md](docs/PACKAGING.md).
+A PyInstaller spec (`scrolly-polly-notely.spec`) is included so you can build your own portable `.exe`. See [docs/PACKAGING.md](docs/PACKAGING.md).
 
 ## Run
 
@@ -177,6 +190,27 @@ python -m pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-Some tests use Tkinter windows and may need a normal desktop session.
+The suite is 99 tests. Some of them create real Tkinter windows and need a normal interactive desktop session, so a headless or service context will fail.
 
-CI runs the same test command on Windows for pushes and pull requests. See [CHANGELOG.md](CHANGELOG.md) for release notes.
+CI runs the same test command on Windows for pushes and pull requests. See [CHANGELOG.md](CHANGELOG.md) for release notes and [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+
+## Stack
+
+Python 3.11+ with the Tkinter standard-library toolkit, Pillow for pasted images, `pywin32` for the Windows Jump List, and pytest for the suite. Notes are plain JSON on disk. No database, no web service, no third-party accounts.
+
+## Limitations
+
+- **Windows only.** Transparency, click-through, the Jump List, and the global recovery hotkey all use Windows APIs; the app is not tested or supported on macOS or Linux.
+- Single-user and single-device. There is no sync, sharing, or multi-device merge, and adding one is out of scope.
+- No packaged installer or signed binary. You run it from source with your own Python, or build the `.exe` yourself.
+- Notes are stored unencrypted in `%APPDATA%`. Treat it as a scratchpad, not a secrets store.
+- Click-through notes cannot be dragged or closed directly. Recovery is through the hub menu or `Ctrl+Alt+Shift+T`.
+- The clipboard helper listens on `127.0.0.1` only, but any local process can reach that port while the app is running.
+
+## Case study
+
+Design decisions and the wider desktop-tools story: [chris-portfolio-97r.pages.dev/case-studies/desktop-tools](https://chris-portfolio-97r.pages.dev/case-studies/desktop-tools/)
+
+## License
+
+MIT — see [LICENSE](LICENSE).
