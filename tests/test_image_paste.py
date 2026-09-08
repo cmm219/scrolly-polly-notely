@@ -1,10 +1,10 @@
-import os, sys, shutil, tempfile, unittest
+import copy
+import os, sys, shutil, unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-TEST_DATA_DIR = os.path.join(tempfile.gettempdir(), "scrolly_polly_notely_tests")
-os.environ["SCROLLY_POLLY_NOTELY_DATA_DIR"] = TEST_DATA_DIR
-os.environ["SCROLLY_POLLY_DISABLE_JUMPLIST"] = "1"
-IMAGE_DIR = os.path.join(TEST_DATA_DIR, "pasted-images")
+from _test_support import TEST_DATA_DIR, assert_test_storage
+assert_test_storage()
+from labels import IMAGE_DIR
 
 class TestImageDir(unittest.TestCase):
     def setUp(self):
@@ -200,6 +200,7 @@ class TestStickyLabelAttributes(unittest.TestCase):
         import unittest.mock as mock
         lbl = self._make_label()
         self.mgr.labels.append(lbl)
+        self.mgr.config["stash"] = [lbl.snapshot()]
         lbl.mark_clean_saved()
 
         with mock.patch("labels.messagebox.askyesnocancel") as ask, \
@@ -216,6 +217,7 @@ class TestStickyLabelAttributes(unittest.TestCase):
         import unittest.mock as mock
         lbl = self._make_label()
         self.mgr.labels.append(lbl)
+        self.mgr.config["stash"] = [lbl.snapshot()]
         lbl.mark_clean_saved()
         lbl.win.geometry("260x140+45+55")
 
@@ -230,6 +232,7 @@ class TestStickyLabelAttributes(unittest.TestCase):
         import unittest.mock as mock
         lbl = self._make_label()
         self.mgr.labels.append(lbl)
+        self.mgr.config["stash"] = [lbl.snapshot()]
         lbl.mark_clean_saved()
         lbl.label.set_text("Changed")
 
@@ -985,9 +988,10 @@ class TestMinimizedGroups(unittest.TestCase):
         self._add_label("one")
         self._add_label("two")
 
+        written = []
         with mock.patch("labels.simpledialog.askstring", return_value="work"), \
              mock.patch.object(self.mgr, "_today_label", return_value="2026-05-21"), \
-             mock.patch("labels.save_config") as save_config:
+             mock.patch("labels.save_config", side_effect=lambda cfg: written.append(copy.deepcopy(cfg))) as save_config:
             self.mgr._save_minimized_group()
 
         group = self.mgr.config["minimized_groups"]["work"]
@@ -995,7 +999,9 @@ class TestMinimizedGroups(unittest.TestCase):
         self.assertEqual([d["text"] for d in group["labels"]], ["one", "two"])
         self.assertEqual(self.mgr.labels, [])
         self.assertEqual(self.mgr.config["last_session"], [])
-        self.assertEqual(save_config.call_count, 2)
+        save_config.assert_called_once_with(self.mgr.config)
+        self.assertEqual(written[0]["last_session"], [])
+        self.assertEqual(written[0], self.mgr.config)
 
     def test_save_minimized_group_cancel_and_blank_are_noops(self):
         import unittest.mock as mock
@@ -1077,9 +1083,10 @@ class TestMinimizedGroups(unittest.TestCase):
         import unittest.mock as mock
         lbl = self._add_label("single")
 
+        written = []
         with mock.patch("labels.simpledialog.askstring", return_value="single-note"), \
              mock.patch.object(self.mgr, "_today_label", return_value="2026-05-21"), \
-             mock.patch("labels.save_config") as save_config:
+             mock.patch("labels.save_config", side_effect=lambda cfg: written.append(copy.deepcopy(cfg))) as save_config:
             lbl._save_as_minimized_group()
 
         group = self.mgr.config["minimized_groups"]["single-note"]
@@ -1087,7 +1094,9 @@ class TestMinimizedGroups(unittest.TestCase):
         self.assertEqual([d["text"] for d in group["labels"]], ["single"])
         self.assertEqual(self.mgr.labels, [])
         self.assertEqual(self.mgr.config["last_session"], [])
-        self.assertEqual(save_config.call_count, 2)
+        save_config.assert_called_once_with(self.mgr.config)
+        self.assertEqual(written[0]["last_session"], [])
+        self.assertEqual(written[0], self.mgr.config)
 
     def test_save_single_note_cancel_is_noop(self):
         import unittest.mock as mock
@@ -1105,9 +1114,10 @@ class TestMinimizedGroups(unittest.TestCase):
         import unittest.mock as mock
         lbl = self._add_label("\n   First real note title with extra words\nbody")
 
+        written = []
         with mock.patch("labels.simpledialog.askstring") as askstring, \
              mock.patch.object(self.mgr, "_today_label", return_value="2026-05-21"), \
-             mock.patch("labels.save_config") as save_config:
+             mock.patch("labels.save_config", side_effect=lambda cfg: written.append(copy.deepcopy(cfg))) as save_config:
             self.mgr._auto_minimize_single_label(lbl)
 
         askstring.assert_not_called()
@@ -1117,7 +1127,9 @@ class TestMinimizedGroups(unittest.TestCase):
         self.assertEqual(group["labels"][0]["text"], "\n   First real note title with extra words\nbody")
         self.assertEqual(self.mgr.labels, [])
         self.assertEqual(self.mgr.config["last_session"], [])
-        self.assertEqual(save_config.call_count, 2)
+        save_config.assert_called_once_with(self.mgr.config)
+        self.assertEqual(written[0]["last_session"], [])
+        self.assertEqual(written[0], self.mgr.config)
 
     def test_auto_minimize_single_note_adds_case_insensitive_suffix(self):
         import unittest.mock as mock

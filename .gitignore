@@ -52,3 +52,8 @@ pasted-images/
 
 # Local test/runtime data
 .test_data/
+
+# Atomic settings backup and instance lock
+notes-and-settings.json.bak
+.instance.lock
+.spn-*.tmp

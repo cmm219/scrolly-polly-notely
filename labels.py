@@ -16,6 +16,10 @@ import threading
 import uuid
 import datetime
 import argparse
+import copy
+import contextlib
+from note_storage import load_document, save_document, DataDirectoryLock
+import note_ipc
 
 try:
     from PIL import ImageGrab, ImageTk
@@ -68,7 +72,7 @@ def _decode_ipc_message(data):
         try:
             return json.loads(data[len(IPC_PREFIX):])
         except json.JSONDecodeError:
-            return {"type": "text", "text": data}
+            return None
     return {"type": "text", "text": data}
 
 
@@ -82,6 +86,7 @@ def _send_ipc_command(command, port=None, timeout=1.0):
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=timeout) as conn:
             conn.sendall(_encode_ipc_command(command).encode("utf-8"))
+            conn.shutdown(socket.SHUT_WR)
         return True
     except OSError:
         return False
@@ -175,29 +180,39 @@ def _extract_image_records(widget):
 
 
 class ReadOnlyText(tk.Text):
-    """Text widget that allows scrolling and selection but blocks editing."""
+    """Block writes at Tcl level, including Tk's built-in editing bindings."""
     def __init__(self, master, **kwargs):
         super().__init__(master, **kwargs)
         self._readonly = True
+        self._original_command = self._w + "_original"
+        self.tk.call("rename", self._w, self._original_command)
+        self.tk.createcommand(self._w, self._proxy)
 
-    def insert(self, *args, **kwargs):
-        if self._readonly:
-            return
-        super().insert(*args, **kwargs)
-
-    def delete(self, *args, **kwargs):
-        if self._readonly:
-            return
-        super().delete(*args, **kwargs)
+    def _proxy(self, *args):
+        if self._readonly and args and (
+            args[0] in ("insert", "delete", "replace") or
+            (args[0] == "edit" and len(args) > 1 and args[1] in ("undo", "redo"))
+        ):
+            return ""
+        return self.tk.call(self._original_command, *args)
 
     def set_readonly(self, value=True):
         self._readonly = value
 
     def set_text(self, text):
         self.set_readonly(False)
-        super().delete("1.0", "end")
-        super().insert("1.0", text)
-        self.set_readonly(True)
+        try:
+            super().delete("1.0", "end")
+            super().insert("1.0", text)
+        finally:
+            self.set_readonly(True)
+
+    def destroy(self):
+        try:
+            super().destroy()
+        finally:
+            with contextlib.suppress(tk.TclError):
+                self.tk.deletecommand(self._w)
 
 CONFIG_PATH = os.path.join(DATA_DIR, "notes-and-settings.json")
 
@@ -219,6 +234,7 @@ MIN_NOTE_H = 96
 TITLEBAR_H = 24
 HUB_DRAG_THRESHOLD_PX = 5
 GLOBAL_RECOVERY_HOTKEY_LABEL = "Ctrl+Alt+Shift+T"
+CONFIG_RECOVERY_NOTICE = None
 
 
 class GlobalRecoveryHotkey:
@@ -396,10 +412,7 @@ class GlobalRecoveryHotkey:
 
 
 def load_config():
-    if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, "r") as f:
-            return json.load(f)
-    return {
+    defaults = {
         "default_bg": DEFAULT_BG,
         "default_fg": DEFAULT_FG,
         "font_family": DEFAULT_FONT_FAMILY,
@@ -413,12 +426,13 @@ def load_config():
         "presets": {},
         "minimized_groups": {},
     }
+    global CONFIG_RECOVERY_NOTICE
+    config, CONFIG_RECOVERY_NOTICE = load_document(CONFIG_PATH, defaults)
+    return config
 
 
 def save_config(cfg):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(cfg, f, indent=2)
+    return save_document(CONFIG_PATH, cfg)
 
 
 def _show_font_family_picker(parent, anchor, title, bg, fg, current_family, font_size, apply_callback, sample_text):
@@ -613,8 +627,8 @@ class StickyLabel:
         self.label.pack(fill="both", expand=True)
 
         if images:
-            _embed_images_into_widget(self.label, images, self._photo_refs)
-            self._images = [dict(d) for d in images if os.path.exists(d.get("path", ""))]
+            self._images = copy.deepcopy([d for d in images if os.path.exists(d.get("path", ""))])
+            _embed_images_into_widget(self.label, self._images, self._photo_refs)
 
         self._apply_checklist_tags()
 
@@ -655,8 +669,8 @@ class StickyLabel:
         self.titlebar.bind("<Leave>", lambda e: self.titlebar.config(cursor="fleur"))
         self.titlebar.bind("<Configure>", lambda e: self._render_titlebar_controls())
         self.label.bind("<Double-Button-1>", self._start_edit)
-        self.label.bind("<Control-Delete>", lambda e: self._close())
-        self.frame.bind("<Control-Delete>", lambda e: self._close())
+        self.label.bind("<Control-Delete>", lambda e: self._request_close())
+        self.frame.bind("<Control-Delete>", lambda e: self._request_close())
         self.label.bind("<Button-3>", self._show_menu)
         self.frame.bind("<Button-3>", self._show_menu)
         self.titlebar.bind("<Button-3>", self._show_menu)
@@ -949,10 +963,25 @@ class StickyLabel:
         self._start_drag(event)
         return "break"
 
+    def _current_content(self):
+        if self._entry is None:
+            return self.label.get("1.0", "end-1c"), copy.deepcopy(self._images)
+        segments, records = _extract_image_records(self._entry)
+        # dump(end) includes precisely one structural Tk newline.
+        text = "".join(segments)[:-1]
+        images = []
+        for record in records:
+            data = self._image_name_map.get(record["tcl_name"])
+            if data is not None:
+                item = copy.deepcopy(data)
+                item["position"] = record["plain_pos"]
+                images.append(item)
+        return text, images
+
     def snapshot(self):
-        self.win.update_idletasks()
+        text, images = self._current_content()
         return {
-            "text": self.label.get("1.0", "end-1c"),
+            "text": text,
             "x": self.win.winfo_x(),
             "y": self.win.winfo_y(),
             "width": self.win.winfo_width(),
@@ -964,7 +993,7 @@ class StickyLabel:
             "transparent": self.transparent,
             "clickthrough": self.clickthrough,
             "ontop": self.ontop,
-            "images": list(self._images),
+            "images": images,
             "opacity": self.opacity,
             "show_window_controls": self.show_window_controls,
         }
@@ -993,10 +1022,19 @@ class StickyLabel:
         self._clean_snapshot_key = self._snapshot_dirty_key()
 
     def is_clean_saved(self):
-        return (
-            self._clean_snapshot_key is not None and
-            self._clean_snapshot_key == self._snapshot_dirty_key()
-        )
+        if self._clean_snapshot_key is None:
+            return False
+        current = self._snapshot_dirty_key()
+        if current != self._clean_snapshot_key:
+            return False
+        # Session persistence disappears on close; only reusable sources count.
+        cfg = self.manager.config
+        sources = list(cfg.get("stash", []))
+        for group in cfg.get("minimized_groups", {}).values():
+            sources.extend(group.get("labels", []))
+        for group in cfg.get("presets", {}).values():
+            sources.extend(group)
+        return any(self._snapshot_dirty_key(data) == current for data in sources)
 
     def _apply_transparent(self, on):
         if on:
@@ -1205,7 +1243,7 @@ class StickyLabel:
             height=1,
             width=20,
             wrap="word",
-            undo=False,
+            undo=True,
         )
 
         # Reconstruct entry content from label dump to preserve image positions
@@ -1227,6 +1265,8 @@ class StickyLabel:
                             self._entry.image_create("end", image=photo)
                         break
 
+        self._entry.delete("end-2c", "end-1c")
+        self._entry.edit_reset()
         self._entry.pack(padx=LABEL_PADX, pady=LABEL_PADY, fill="both", expand=True)
         self._entry.focus_set()
         self._entry.tag_add("sel", "1.0", "end")
@@ -1236,7 +1276,15 @@ class StickyLabel:
         self._entry.bind("<FocusOut>", self._finish_edit)
         self._entry.bind("<KeyRelease>", self._resize_entry)
         self._entry.bind("<Control-v>", self._paste_image)
+        self._entry.bind("<Control-z>", lambda e: self._edit_history("undo"))
+        self._entry.bind("<Control-y>", lambda e: self._edit_history("redo"))
         self._entry.bind("<Button-3>", self._show_edit_menu)
+        return "break"
+
+    def _edit_history(self, action):
+        if self._entry is not None:
+            with contextlib.suppress(tk.TclError):
+                getattr(self._entry, "edit_" + action)()
         return "break"
 
     def _entry_cut(self):
@@ -1258,8 +1306,6 @@ class StickyLabel:
     def _entry_select_all(self):
         if self._entry:
             end = "end-1c"
-            if self._entry.get("1.0", end).endswith("\n"):
-                end = "end-2c"
             self._entry.tag_remove("sel", "1.0", "end")
             self._entry.tag_add("sel", "1.0", end)
             self._entry.mark_set("insert", end)
@@ -1269,6 +1315,9 @@ class StickyLabel:
             return "break"
         self._entry.focus_set()
         menu = tk.Menu(self._entry, tearoff=0)
+        menu.add_command(label="Undo", command=lambda: self._edit_history("undo"))
+        menu.add_command(label="Redo", command=lambda: self._edit_history("redo"))
+        menu.add_separator()
         menu.add_command(label="Cut", command=self._entry_cut)
         menu.add_command(label="Copy", command=self._entry_copy)
         menu.add_command(label="Paste", command=self._entry_paste)
@@ -1278,78 +1327,22 @@ class StickyLabel:
         return "break"
 
     def _finish_edit(self, event=None):
-        if not self._entry:
-            if event:
-                return "break"
-            return
-
-        # Step 1: Extract content from entry widget
-        text_segments, image_records = _extract_image_records(self._entry)
-        plain_text = "".join(text_segments).strip()
-
-        # Step 2: Build new PhotoImage objects for self.label
-        new_photo_refs = []
-        new_images = []
-
-        if ImageTk is not None:
-            for rec in image_records:
-                img_dict = self._image_name_map.get(rec["tcl_name"])
-                if img_dict is None:
-                    continue
-                path = img_dict.get("path", "")
-                if not os.path.exists(path):
-                    continue
-                try:
-                    photo = ImageTk.PhotoImage(file=path)
-                except Exception:
-                    continue
-                new_photo_refs.append(photo)
-                new_images.append({
-                    "path": img_dict["path"],
-                    "original_path": img_dict["original_path"],
-                    "width": img_dict["width"],
-                    "height": img_dict["height"],
-                    "position": rec["plain_pos"],
-                })
-
-        # Step 3: Commit to self.label
-        if plain_text:
-            self.label.set_text(plain_text)
-
-        # Clear old image frames
-        for f in self._image_frames:
-            f.destroy()
+        if self._entry is None:
+            return "break" if event else None
+        text, images = self._current_content()
+        self.label.set_text(text)
+        for frame in self._image_frames:
+            frame.destroy()
         self._image_frames = []
-
-        # Re-embed images as window frames
-        per_line_count = {}
-        for img_dict, photo in zip(new_images, new_photo_refs):
-            plain_pos = img_dict["position"]
-            try:
-                line, col = plain_pos.split(".")
-                count = per_line_count.get(line, 0)
-                insert_idx = f"{line}.{int(col) + count}"
-                per_line_count[line] = count + 1
-            except (ValueError, AttributeError):
-                insert_idx = "end"
-            frame = self._make_image_frame(photo, img_dict)
-            self.label.window_create(insert_idx, window=frame)
-
-        # Atomically replace refs
-        self._photo_refs = new_photo_refs
-        self._images = new_images
-
-        # Step 4: Cleanup
+        self._photo_refs = []
+        self._images = images
+        _embed_images_into_widget(self.label, self._images, self._photo_refs)
+        entry, self._entry = self._entry, None
+        entry.destroy()
         self._entry_photo_refs = []
-        self._entry.destroy()
-        self._entry = None
-
         self.label.pack(padx=0, pady=0, fill="both", expand=True)
-
         self._apply_checklist_tags()
-
-        if event:
-            return "break"
+        return "break" if event else None
 
     def _cancel_edit(self, event=None):
         if self._entry:
@@ -1528,7 +1521,7 @@ class StickyLabel:
         menu.add_command(label="Duplicate", command=self._duplicate)
         menu.add_command(label="Save as...", command=self._save_as_minimized_group)
         menu.add_command(label="Stash & close", command=self._stash)
-        menu.add_command(label="Close", command=self._close)
+        menu.add_command(label="Close", command=self._request_close)
         menu.tk_popup(event.x_root, event.y_root)
         return "break"
 
@@ -1616,46 +1609,50 @@ class StickyLabel:
         popup.bind("<Escape>", close)
 
     def _duplicate(self):
-        x = self.win.winfo_x() + 30
-        y = self.win.winfo_y() + 30
-        self.manager.spawn_label(
-            text=self.label.get("1.0", "end-1c"), x=x, y=y, bg=self.bg, fg=self.fg,
-            transparent=self.transparent, font_size=self.font_size,
-            font_family=self.font_family,
-            clickthrough=self.clickthrough,
-            images=list(self._images),
-        )
+        data = self.snapshot()
+        data["x"] += 30
+        data["y"] += 30
+        return self.manager._restore_snapshots([data], reusable=False)
 
     def _save_as_minimized_group(self):
         self.manager._save_single_minimized_group(self)
 
     def _stash(self):
-        import datetime
         data = self.snapshot()
-        data["stashed_on"] = datetime.date.today().strftime("%#m/%#d")
-        if "stash" not in self.manager.config:
-            self.manager.config["stash"] = []
-        self.manager.config["stash"].append(data)
-        save_config(self.manager.config)
-        self._close()
+        data["stashed_on"] = datetime.date.today().isoformat()
+        with self.manager._mutation():
+            staged = copy.deepcopy(self.manager.config)
+            staged.setdefault("stash", []).append(data)
+            self.manager._save_and_remove(staged, [self])
 
     def _close(self):
+        if (self in self.manager.labels and
+                not getattr(self.manager, "_suppress_close_persist", False)):
+            with self.manager._mutation():
+                self.manager._save_and_remove(copy.deepcopy(self.manager.config), [self])
+            return
         self.win.destroy()
         if self in self.manager.labels:
             self.manager.labels.remove(self)
-        if (hasattr(self.manager, "_persist_last_session") and
-                not getattr(self.manager, "_suppress_close_persist", False)):
-            self.manager._persist_last_session()
 
 
 class LabelManager:
     def __init__(self, pending_restore=None):
         self.config = load_config()
+        self._autosave_enabled = False
+        self._autosave_after_id = None
+        self._mutation_depth = 0
+        self._autosave_failed_state = None
+        self._ipc_after_id = None
+        self._ipc_messages = queue.Queue(maxsize=64)
+        self._socket_stop = threading.Event()
+        self._server_socket = None
         self.labels = []
         self.pending_restore = pending_restore
 
         self.root = tk.Tk()
-        self.root.title("Pane Labels")
+        self.root.title("Scrolly Polly Notely")
+        self.root.report_callback_exception = self._callback_error
         self.root.overrideredirect(True)
         self.hub_ontop = self.config.get("hub_always_on_top", True)
         self.root.attributes("-topmost", self.hub_ontop)
@@ -1682,6 +1679,9 @@ class LabelManager:
         self.close_btn.pack(side="left")
         self._bind_hub_button(self.close_btn, lambda e: self._quit())
 
+        self.save_status = tk.Label(self.frame, text="Saved", bg=bg, fg=fg, font=("Consolas", 8))
+        self.save_status.pack(side="left", padx=4)
+
         # Hub right-click — presets
         self.frame.bind("<Button-3>", self._show_hub_menu)
         self.add_btn.bind("<Button-3>", self._show_hub_menu)
@@ -1704,9 +1704,12 @@ class LabelManager:
         self._hub_dragged = False
         self.global_recovery_hotkey = None
         self._global_recovery_hotkey_poll_after_id = None
+        try:
+            self._start_socket_listener()
+        except OSError:
+            self.root.destroy()
+            raise
         self._start_global_recovery_hotkey()
-
-        threading.Thread(target=self._socket_listener, daemon=True).start()
 
         self.root.geometry("+10+10")
 
@@ -1716,30 +1719,50 @@ class LabelManager:
         if self.pending_restore:
             self.root.after(0, lambda n=self.pending_restore: self._restore_minimized_group(n))
         self.root.after(200, self._publish_jump_list)
+        self._autosave_enabled = True
+        self._schedule_autosave()
+        self._ipc_after_id = self.root.after(100, self._drain_ipc)
+        if CONFIG_RECOVERY_NOTICE:
+            self.root.after(0, lambda: messagebox.showwarning("Recovered notes", CONFIG_RECOVERY_NOTICE, parent=self.root))
+
+    def _start_socket_listener(self):
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            if os.name == "nt":
+                server.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            server.bind(("127.0.0.1", self.config.get("socket_port", 47210)))
+            server.listen()
+        except OSError as error:
+            server.close()
+            raise OSError("The clipboard port is already in use. Close the existing Scrolly Polly Notely app or choose another socket_port before launching.") from error
+        self._server_socket = server
+        threading.Thread(target=self._socket_listener, daemon=True).start()
 
     def _socket_listener(self):
-        port = self.config.get("socket_port", 47210)
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(("127.0.0.1", port))
-            s.listen()
-            while True:
-                try:
-                    conn, _ = s.accept()
-                    with conn:
-                        data = conn.recv(4096).decode("utf-8", errors="replace").strip()
-                        if data:
-                            message = _decode_ipc_message(data)
-                            self.root.after(0, lambda m=message: self._handle_ipc_message(m))
-                except Exception:
-                    break
+        note_ipc.listen(self._server_socket, self._socket_stop, self._ipc_messages)
+
+    def _drain_ipc(self):
+        self._ipc_after_id = None
+        for _ in range(8):
+            try:
+                data = self._ipc_messages.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                self._handle_ipc_message(_decode_ipc_message(data))
+            except Exception as error:
+                self._callback_error(type(error), error, error.__traceback__)
+        self._ipc_after_id = self.root.after(100, self._drain_ipc)
 
     def _handle_ipc_message(self, message):
-        if message.get("type") == "restore_minimized":
-            self._restore_minimized_group(message.get("name", ""))
-            self._bring_to_front()
+        if not isinstance(message, dict):
             return
-        self.spawn_label(text=message.get("text", ""))
+        kind = message.get("type")
+        if kind == "restore_minimized" and isinstance(message.get("name"), str):
+            self._restore_minimized_group(message["name"])
+            self._bring_to_front()
+        elif kind == "text" and isinstance(message.get("text"), str):
+            self.spawn_label(text=message["text"])
 
     def _bring_to_front(self):
         self.root.lift()
@@ -1878,9 +1901,98 @@ class LabelManager:
     def _get_snapshots(self):
         return [l.snapshot() for l in self.labels]
 
+    @contextlib.contextmanager
+    def _mutation(self):
+        depth = getattr(self, "_mutation_depth", 0)
+        self._mutation_depth = depth + 1
+        pending = getattr(self, "_autosave_after_id", None)
+        if pending:
+            self.root.after_cancel(pending)
+            self._autosave_after_id = None
+        try:
+            yield
+        finally:
+            self._mutation_depth = depth
+            if depth == 0:
+                self._schedule_autosave()
+
+    def _set_save_status(self, text):
+        if hasattr(self, "save_status"):
+            self.save_status.config(text=text)
+
+    def _commit_config(self, staged):
+        warning = save_config(staged)
+        self.config = staged
+        self._autosave_failed_state = None
+        self._set_save_status(warning or "Saved")
+
     def _persist_last_session(self):
-        self.config["last_session"] = self._get_snapshots()
-        save_config(self.config)
+        with self._mutation():
+            staged = copy.deepcopy(self.config)
+            staged["last_session"] = self._get_snapshots()
+            self._commit_config(staged)
+
+    def _schedule_autosave(self):
+        if (getattr(self, "_autosave_enabled", False) and
+                not getattr(self, "_mutation_depth", 0) and
+                not getattr(self, "_autosave_after_id", None)):
+            self._autosave_after_id = self.root.after(750, self._autosave)
+
+    def _autosave(self):
+        self._autosave_after_id = None
+        if getattr(self, "_mutation_depth", 0):
+            return
+        try:
+            snapshots = self._get_snapshots()
+            signature = json.dumps(snapshots, sort_keys=True)
+            if (snapshots != self.config.get("last_session", []) and
+                    signature != getattr(self, "_autosave_failed_state", None)):
+                try:
+                    self._persist_last_session()
+                except (OSError, ValueError):
+                    self._autosave_failed_state = signature
+                    self._set_save_status("Not saved — retry from gear")
+        finally:
+            self._schedule_autosave()
+
+    def _callback_error(self, kind, error, traceback):
+        self._set_save_status("Action failed — notes kept open")
+        messagebox.showerror("Could not complete action", str(error), parent=self.root)
+
+    def _save_and_remove(self, staged, removed):
+        staged["last_session"] = [note.snapshot() for note in self.labels if note not in removed]
+        self._commit_config(staged)
+        self._suppress_close_persist = True
+        try:
+            for note in removed:
+                note._close()
+        finally:
+            self._suppress_close_persist = False
+
+    def _restore_snapshots(self, snapshots, reusable=True):
+        with self._mutation():
+            original = list(self.labels)
+            children = set(self.root.winfo_children())
+            try:
+                restored = []
+                for data in snapshots:
+                    note = self._spawn_from_data(copy.deepcopy(data))
+                    if note is not None:
+                        note.win.withdraw()
+                        if not reusable:
+                            note._clean_snapshot_key = None
+                        restored.append(note)
+                staged = copy.deepcopy(self.config)
+                staged["last_session"] = self._get_snapshots()
+                self._commit_config(staged)
+            except Exception:
+                self.labels = original
+                for child in set(self.root.winfo_children()) - children:
+                    child.destroy()
+                raise
+            for note in restored:
+                note.win.deiconify()
+            return restored
 
     # --- Hub right-click menu (presets) ---
     def _show_hub_menu(self, event):
@@ -1940,11 +2052,16 @@ class LabelManager:
 
     def _save_preset(self):
         name = simpledialog.askstring("Save Preset", "Preset name:")
-        if name:
-            if "presets" not in self.config:
-                self.config["presets"] = {}
-            self.config["presets"][name] = self._get_snapshots()
-            save_config(self.config)
+        if not name or not name.strip():
+            return
+        name = name.strip()
+        if name in self.config.get("presets", {}) and not messagebox.askyesno("Replace preset", f"Replace '{name}'?", parent=self.root):
+            return
+        with self._mutation():
+            staged = copy.deepcopy(self.config)
+            staged.setdefault("presets", {})[name] = self._get_snapshots()
+            staged["last_session"] = self._get_snapshots()
+            self._commit_config(staged)
 
     def _today_label(self):
         return datetime.date.today().isoformat()
@@ -2018,31 +2135,20 @@ class LabelManager:
             base = "Image note" if snapshot.get("images") else "Untitled note"
         return self._unique_minimized_name(base)
 
-    def _store_single_minimized_snapshot(self, name, snapshot):
-        minimized_groups = dict(self.config.get("minimized_groups", {}))
-        minimized_groups[name] = {
-            "saved_on": self._today_label(),
-            "labels": [snapshot],
-        }
-        staged_config = dict(self.config)
-        staged_config["minimized_groups"] = minimized_groups
-        save_config(staged_config)
-        self.config = staged_config
+
 
     def _auto_minimize_single_label(self, label):
         if label not in self.labels:
             return
-        snapshot = label.snapshot()
-        name = self._auto_minimized_name(snapshot)
-        self._store_single_minimized_snapshot(name, snapshot)
-        self._suppress_close_persist = True
-        try:
-            label._close()
-        finally:
-            self._suppress_close_persist = False
-        self.config["last_session"] = self._get_snapshots()
-        save_config(self.config)
-        self._publish_jump_list()
+        with self._mutation():
+            snapshot = label.snapshot()
+            name = self._auto_minimized_name(snapshot)
+            staged = copy.deepcopy(self.config)
+            staged.setdefault("minimized_groups", {})[name] = {
+                "saved_on": self._today_label(), "labels": [snapshot],
+            }
+            self._save_and_remove(staged, [label])
+            self._publish_jump_list()
 
     def _save_minimized_group(self):
         if not self.labels:
@@ -2065,18 +2171,14 @@ class LabelManager:
             if not overwrite:
                 return
 
-        minimized_groups[name] = {
-            "saved_on": self._today_label(),
-            "labels": self._get_snapshots(),
-        }
-        staged_config = dict(self.config)
-        staged_config["minimized_groups"] = minimized_groups
-        save_config(staged_config)
-        self.config = staged_config
-        self._close_all(persist=False)
-        self.config["last_session"] = self._get_snapshots()
-        save_config(self.config)
-        self._publish_jump_list()
+        with self._mutation():
+            minimized_groups[name] = {
+                "saved_on": self._today_label(), "labels": self._get_snapshots(),
+            }
+            staged = copy.deepcopy(self.config)
+            staged["minimized_groups"] = minimized_groups
+            self._save_and_remove(staged, list(self.labels))
+            self._publish_jump_list()
 
     def _save_single_minimized_group(self, label):
         if label not in self.labels:
@@ -2098,48 +2200,40 @@ class LabelManager:
             if not overwrite:
                 return
 
-        self._store_single_minimized_snapshot(name, label.snapshot())
-        self._suppress_close_persist = True
-        try:
-            label._close()
-        finally:
-            self._suppress_close_persist = False
-        self.config["last_session"] = self._get_snapshots()
-        save_config(self.config)
-        self._publish_jump_list()
+        with self._mutation():
+            staged = copy.deepcopy(self.config)
+            staged.setdefault("minimized_groups", {})[name] = {
+                "saved_on": self._today_label(), "labels": [label.snapshot()],
+            }
+            self._save_and_remove(staged, [label])
+            self._publish_jump_list()
 
     def _restore_minimized_group(self, name):
         group = self.config.get("minimized_groups", {}).get(name)
-        if not group:
-            return
-        for d in group.get("labels", []):
-            self._spawn_from_data(d)
-        self.config["last_session"] = self._get_snapshots()
-        save_config(self.config)
+        if group:
+            self._restore_snapshots(group.get("labels", []))
 
     def _delete_minimized_group(self, name):
-        groups = self.config.get("minimized_groups", {})
-        if name in groups:
-            delete = messagebox.askyesno(
-                "Delete Minimized Group",
-                f"Delete the saved minimized group '{name}'?",
-            )
-            if not delete:
-                return
-            del groups[name]
-            self.config["minimized_groups"] = groups
-            save_config(self.config)
+        if name not in self.config.get("minimized_groups", {}):
+            return
+        if not messagebox.askyesno("Delete Minimized Group", f"Delete the saved minimized group '{name}'?"):
+            return
+        with self._mutation():
+            staged = copy.deepcopy(self.config)
+            staged["minimized_groups"].pop(name, None)
+            self._commit_config(staged)
             self._publish_jump_list()
 
     def _load_preset(self, name):
-        self._close_all()
-        for d in self.config["presets"].get(name, []):
-            self._spawn_from_data(d)
+        if name in self.config.get("presets", {}):
+            self._restore_snapshots(self.config["presets"][name])
 
     def _delete_preset(self, name):
         if name in self.config.get("presets", {}):
-            del self.config["presets"][name]
-            save_config(self.config)
+            with self._mutation():
+                staged = copy.deepcopy(self.config)
+                del staged["presets"][name]
+                self._commit_config(staged)
 
     def _saved_notes_items(self):
         items = []
@@ -2183,7 +2277,7 @@ class LabelManager:
                 "count": count,
                 "preview": preview,
                 "label": f"[Minimized] {name} | {count} {suffix} | {self._display_saved_on(saved_on)}",
-                "search": " ".join(["minimized", name, saved_on or "", preview]).casefold(),
+                "search": " ".join(["minimized", name, saved_on or "", preview, "\n".join(d.get("text", "") for d in group.get("labels", []))]).casefold(),
                 "sort_date": date_key(saved_on),
             })
         for idx, item in enumerate(self.config.get("stash", [])):
@@ -2208,7 +2302,7 @@ class LabelManager:
                 "count": 1,
                 "preview": preview,
                 "label": f"[Stash] {title} | 1 note | {self._display_saved_on(saved_on)}",
-                "search": " ".join(["stash", title, saved_on or "", preview]).casefold(),
+                "search": " ".join(["stash", title, saved_on or "", preview, item.get("text", "")]).casefold(),
                 "sort_date": date_key(saved_on),
             })
         for name in sorted(self.config.get("presets", {}).keys()):
@@ -2225,17 +2319,17 @@ class LabelManager:
                 "count": count,
                 "preview": preview,
                 "label": f"[Preset] {name} | {count} {suffix}",
-                "search": " ".join(["preset", name, preview]).casefold(),
+                "search": " ".join(["preset", name, preview, "\n".join(d.get("text", "") for d in notes)]).casefold(),
                 "sort_date": "",
             })
         return sorted(items, key=lambda item: (item.get("sort_date", ""), item.get("title", "").casefold()), reverse=True)
 
     def _delete_stash_item(self, idx):
-        stash = self.config.get("stash", [])
-        if 0 <= idx < len(stash):
-            del stash[idx]
-            self.config["stash"] = stash
-            save_config(self.config)
+        if 0 <= idx < len(self.config.get("stash", [])):
+            with self._mutation():
+                staged = copy.deepcopy(self.config)
+                del staged["stash"][idx]
+                self._commit_config(staged)
 
     def _show_saved_notes_window(self):
         popup = tk.Toplevel(self.root)
@@ -2298,6 +2392,7 @@ class LabelManager:
                 item for item in all_items
                 if not query or query in item.get("search", "")
             ]
+            saved_list.config(state="normal")
             saved_list.delete(0, "end")
             if not all_items:
                 saved_list.insert("end", "No saved notes yet")
@@ -2319,7 +2414,7 @@ class LabelManager:
             if not items:
                 return None
             selection = saved_list.curselection()
-            if not selection:
+            if not selection or selection[0] >= len(items):
                 return None
             return items[selection[0]]
 
@@ -2406,16 +2501,16 @@ class LabelManager:
 
     def _restore_stash(self, idx):
         stash = self.config.get("stash", [])
-        if idx < len(stash):
-            item = stash.pop(idx)
-            item.pop("stashed_on", None)
-            self.config["stash"] = stash
-            save_config(self.config)
-            self._spawn_from_data(item)
+        if 0 <= idx < len(stash):
+            self._restore_snapshots([stash[idx]])
 
     def _clear_stash(self):
-        self.config["stash"] = []
-        save_config(self.config)
+        if not messagebox.askyesno("Clear stash", "Delete all stashed notes?", parent=self.root):
+            return
+        with self._mutation():
+            staged = copy.deepcopy(self.config)
+            staged["stash"] = []
+            self._commit_config(staged)
 
     def _disable_all_clickthrough(self):
         for label in list(self.labels):
@@ -2468,6 +2563,7 @@ class LabelManager:
         menu.add_command(label=controls_label, command=self._toggle_default_window_controls)
         menu.add_separator()
         menu.add_command(label="Saved notes...", command=self._show_saved_notes_window)
+        menu.add_command(label="Save now / retry", command=self._persist_last_session)
         menu.add_command(label="Close all labels", command=self._close_all)
         menu.tk_popup(event.x_root, event.y_root)
 
@@ -2533,23 +2629,40 @@ class LabelManager:
         self.add_btn.config(bg=bg, fg=fg)
         self.settings_btn.config(bg=bg, fg=fg)
         self.close_btn.config(bg=bg, fg=fg)
+        if hasattr(self, "save_status"):
+            self.save_status.config(bg=bg, fg=fg)
 
     def _close_all(self, persist=True):
-        self._suppress_close_persist = True
-        try:
-            for label in self.labels[:]:
-                label._close()
-        finally:
-            self._suppress_close_persist = False
         if persist:
-            self._persist_last_session()
+            if not self.labels:
+                self._persist_last_session()
+                return
+            # User-facing bulk close follows the same save/discard/cancel flow.
+            for note in list(self.labels):
+                note._request_close()
+                if note in self.labels:
+                    break
+        else:
+            self._suppress_close_persist = True
+            try:
+                for note in list(self.labels):
+                    note._close()
+            finally:
+                self._suppress_close_persist = False
 
     def _quit(self):
-        self._stop_global_recovery_hotkey()
-        # Auto-save session on close
-        self.config["last_session"] = self._get_snapshots()
-        save_config(self.config)
-        self.root.destroy()
+        with self._mutation():
+            self._persist_last_session()  # Failure leaves windows and workers alive.
+            self._autosave_enabled = False
+            self._stop_global_recovery_hotkey()
+            if hasattr(self, "_socket_stop"):
+                self._socket_stop.set()
+            if getattr(self, "_server_socket", None):
+                self._server_socket.close()
+            if getattr(self, "_ipc_after_id", None):
+                self.root.after_cancel(self._ipc_after_id)
+                self._ipc_after_id = None
+            self.root.destroy()
 
     def run(self):
         self.root.mainloop()
@@ -2570,8 +2683,13 @@ def main(argv=None):
         sent = _send_ipc_command({"type": "restore_minimized", "name": args.restore_saved})
         if sent:
             return 0
-    manager = LabelManager(pending_restore=args.restore_saved)
-    manager.run()
+    try:
+        with DataDirectoryLock(DATA_DIR):
+            manager = LabelManager(pending_restore=args.restore_saved)
+            manager.run()
+    except (OSError, ValueError) as error:
+        messagebox.showerror("Cannot open Scrolly Polly Notely", str(error))
+        return 1
     return 0
 
 
