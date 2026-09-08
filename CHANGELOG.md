@@ -2,6 +2,8 @@
 
 ## Unreleased — QA reliability fixes
 
+- Keep caught Tk text-index errors inside Tcl so native note interactions cannot escape the event loop through the read-only guard.
+
 - Prevent interrupted writes from corrupting the only settings copy; keep a validated backup and report recovery/save errors.
 - Save active edits and images before minimize/quit, preserve open notes when restoring presets, and keep stash sources reusable.
 - Correct empty-text edits, read-only input, saved-note search and full-fidelity duplication.

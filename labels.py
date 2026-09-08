@@ -180,24 +180,37 @@ def _extract_image_records(widget):
 
 
 class ReadOnlyText(tk.Text):
-    """Block writes at Tcl level, including Tk's built-in editing bindings."""
+    """Keep write protection and Tk's caught errors inside the Tcl interpreter."""
     def __init__(self, master, **kwargs):
         super().__init__(master, **kwargs)
-        self._readonly = True
+        self._destroyed = False
         self._original_command = self._w + "_original"
+        self._readonly_variable = "::" + self._w + "_readonly"
+        self.set_readonly(True)
         self.tk.call("rename", self._w, self._original_command)
-        self.tk.createcommand(self._w, self._proxy)
-
-    def _proxy(self, *args):
-        if self._readonly and args and (
-            args[0] in ("insert", "delete", "replace") or
-            (args[0] == "edit" and len(args) > 1 and args[1] in ("undo", "redo"))
-        ):
-            return ""
-        return self.tk.call(self._original_command, *args)
+        # Tcl list/format quote identifiers, including explicitly named widgets.
+        # No Python callback: a caught Tcl error must not escape mainloop().
+        body = self.tk.call(
+            "format", "%s\n%s\n%s",
+            self.tk.call("list", "set", "original", self._original_command),
+            self.tk.call("list", "set", "flag", self._readonly_variable),
+            """
+            if {![info exists $flag] || [set $flag]} {
+                set operation [lindex $args 0]
+                if {$operation in {insert delete replace} ||
+                    ($operation eq "edit" && [lindex $args 1] in {undo redo})} {
+                    return ""
+                }
+            }
+            catch {uplevel 1 [list $original {*}$args]} result options
+            return -options $options $result
+            """,
+        )
+        self.tk.call("proc", self._w, "args", body)
 
     def set_readonly(self, value=True):
-        self._readonly = value
+        self._readonly = bool(value)
+        self.tk.setvar(self._readonly_variable, self._readonly)
 
     def set_text(self, text):
         self.set_readonly(False)
@@ -208,11 +221,16 @@ class ReadOnlyText(tk.Text):
             self.set_readonly(True)
 
     def destroy(self):
+        if self._destroyed:
+            return
+        self._destroyed = True
         try:
             super().destroy()
         finally:
             with contextlib.suppress(tk.TclError):
-                self.tk.deletecommand(self._w)
+                self.tk.call("rename", self._w, "")
+            with contextlib.suppress(tk.TclError):
+                self.tk.call("unset", "-nocomplain", self._readonly_variable)
 
 CONFIG_PATH = os.path.join(DATA_DIR, "notes-and-settings.json")
 

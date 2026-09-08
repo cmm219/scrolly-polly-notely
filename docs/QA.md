@@ -33,3 +33,20 @@ The stress script constructs menus but mocks native popup presentation, and
 uses synthetic image clipboard values. It does not certify native menu,
 screen-reader, mixed-DPI, multi-monitor, global-hotkey conflict, or packaged
 Windows Jump List behavior. Those remain manual release checks.
+
+
+Native QA found an additional event-loop regression: a Python Tcl-command
+proxy let a caught `bad text index "tk::anchor1"` error escape `mainloop()`.
+The write guard now runs inside Tcl, preserving normal caught-error behavior.
+`tests/test_native_text.py` compares caught errors with stock Tk Text, verifies
+the next event-loop tick, direct-error fidelity, per-widget toggles, internal
+text/image updates and repeated parent/double-destroy cleanup.
+
+Native Windows inspection also found that Tk note text is exposed as generic
+panes and hub controls as unnamed images in UI Automation. Screen-reader
+accessibility remains an observed limitation, not a passed check. A temporary
+QA harness adds OS frames because the desktop automation tool does not list
+the product's borderless windows; its results do not certify borderless shell
+discovery or every mixed-DPI setup. Native menus, typing, undo/redo, autosave,
+duplicate, and the actual hotkey-conflict warning were exercised with synthetic
+notes. Jump List COM publication used a separate QA app identity.
