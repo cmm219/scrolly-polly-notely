@@ -19,7 +19,7 @@ Use it for:
 
 ## Status
 
-Shipped and maintained. Eight tagged releases to date; see [the latest release](https://github.com/cmm219/scrolly-polly-notely/releases/latest) and [CHANGELOG.md](CHANGELOG.md). The test suite is **99 tests**, run on Windows in CI for every push and pull request. The app is intentionally small and local-first.
+Shipped and maintained; see [the latest release](https://github.com/cmm219/scrolly-polly-notely/releases/latest) and [CHANGELOG.md](CHANGELOG.md). The test suite runs on Windows in CI for every push and pull request. The app is intentionally small and local-first.
 
 ## Screenshots
 
@@ -71,6 +71,7 @@ You can drag the hub from the blank strip or from the `+`, gear, and `x` control
 - Use the note titlebar controls to minimize a note into saved notes, maximize or restore the note size, or close the note.
 - Double-click a note to edit its text.
 - While editing a note, right-click the text area for `Cut`, `Copy`, `Paste`, and `Select all`.
+- Text editing supports `Ctrl+Z` / `Ctrl+Y` and right-click `Undo` / `Redo`. Empty edits and intentional whitespace are preserved.
 - Right-click a pasted image for image resize and delete actions.
 - Use the hub gear menu's `Saved notes...` action to search, preview, restore, or delete saved notes, minimized groups, stash entries, and presets.
 - Use the hub right-click menu's `Minimized` submenu to save all currently open notes as a named group or restore/delete existing minimized groups.
@@ -106,7 +107,7 @@ The app has two saved-note flows:
 - `Minimized` saves open notes as a restorable work group and removes them from the desktop.
 - `Saved notes...` opens a library view where saved groups, stash entries, and presets can be searched, previewed, restored, or deleted.
 
-Restoring a saved group adds those notes beside whatever is already open. It does not delete the saved group, so the same group can be restored again later.
+Restoring a saved group, preset, or stashed note adds notes beside whatever is already open and keeps the saved source available. Search includes the full text of every note in a group. Closing an unchanged restored note skips the save prompt only while its saved source still exists; edited notes and session-only notes still prompt.
 
 On Windows, pinned app Jump Lists can show saved note groups under `Saved notes`. Choosing one starts the app if needed and restores that group.
 
@@ -122,6 +123,10 @@ Checklist lines use plain text syntax:
 Click a checklist line to toggle it. Checked items are struck through, dimmed, and sorted below unchecked items. Numbered lists are plain text.
 
 ## Data Storage
+
+Open notes, including active text edits, are autosaved when changed, on a 750 ms interval. The hub shows save status; use the gear menu's `Save now / retry` action after an error. Quit flushes current edits and keeps the app open if saving fails.
+
+Settings are written by atomic replacement. The previous valid document is kept as `notes-and-settings.json.bak`; an unreadable primary file can be loaded from that backup with a recovery notice. Loading never rewrites a damaged source. If neither file is readable, the app reports the paths without resetting your notes. Only one app can use a data folder at a time.
 
 Your notes and pasted images are stored outside the project folder:
 
@@ -150,6 +155,8 @@ When the app is running, `send_label.ps1` sends the current clipboard text into 
 The default local port is `47210`. The socket binds to `127.0.0.1` only and does not accept remote network connections. The app does not make outbound network calls or send telemetry.
 
 Advanced users can change `socket_port` in their config file.
+
+The helper reads that configured port (or a readable settings backup), or accepts `-Port 47210` explicitly. User-configured ports must be 1–65535; port 0 is reserved for isolated test listeners. Clipboard messages are limited to 1 MiB of UTF-8 within a two-second whole-message deadline; incomplete or stalled messages are discarded. The listener remains available after a client error.
 
 If PowerShell blocks the helper script on a fresh Windows install, run it for the current process with:
 
@@ -190,7 +197,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-The suite is 99 tests. Some of them create real Tkinter windows and need a normal interactive desktop session, so a headless or service context will fail.
+Some tests create real Tkinter windows and need a normal interactive desktop session. Test entry points use unique temporary data folders and protect live notes/images. The additional `python tests/stress_test.py` flow check uses synthetic events and suppresses native popup display, clipboard reads, Jump Lists and global hotkey registration. It returns a nonzero exit code on failure. See [QA coverage](docs/QA.md) for regression identities and remaining native checks.
 
 CI runs the same test command on Windows for pushes and pull requests. See [CHANGELOG.md](CHANGELOG.md) for release notes and [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 

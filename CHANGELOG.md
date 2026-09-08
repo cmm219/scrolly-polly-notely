@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.3.0 - 2026-09-08
+
+- Keep caught Tk text-index errors inside Tcl so native note interactions cannot escape the event loop through the read-only guard.
+
+- Prevent interrupted writes from corrupting the only settings copy; keep a validated backup and report recovery/save errors.
+- Save active edits and images before minimize/quit, preserve open notes when restoring presets, and keep stash sources reusable.
+- Correct empty-text edits, read-only input, saved-note search and full-fidelity duplication.
+- Add autosave status/retry, text undo/redo, full-body search and bounded Unicode clipboard transfer using the configured port.
+- Isolate all test data, add regression/failure-injection coverage and prevent concurrent instances from writing the same data folder.
+
 ## v1.2.0 - 2026-07-20
 
 - Fixed multi-photo notes so pasted images stay distinct after edit cycles, restart, and reload.
