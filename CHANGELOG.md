@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — QA reliability fixes
+## v1.3.0 - 2026-09-08
 
 - Keep caught Tk text-index errors inside Tcl so native note interactions cannot escape the event loop through the read-only guard.
 
