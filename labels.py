@@ -446,7 +446,32 @@ def load_config():
     }
     global CONFIG_RECOVERY_NOTICE
     config, CONFIG_RECOVERY_NOTICE = load_document(CONFIG_PATH, defaults)
+    _relocate_image_paths(config)
     return config
+
+
+def _relocate_image_paths(value):
+    """Saved image paths are absolute; after the data folder moves, find them in IMAGE_DIR."""
+    if isinstance(value, list):
+        for item in value:
+            _relocate_image_paths(item)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            if key == "images" and isinstance(item, list):
+                for image in item:
+                    if isinstance(image, dict):
+                        _relocate_image(image)
+            elif isinstance(item, (dict, list)):
+                _relocate_image_paths(item)
+
+
+def _relocate_image(image):
+    for key in ("path", "original_path"):
+        path = image.get(key)
+        if isinstance(path, str) and path and not os.path.exists(path):
+            moved = os.path.join(IMAGE_DIR, os.path.basename(path))
+            if os.path.isfile(moved):
+                image[key] = moved
 
 
 def save_config(cfg):
@@ -1529,8 +1554,6 @@ class StickyLabel:
         menu.add_command(label="Opacity...", command=self._pick_opacity)
         trans_label = "✓ Transparent background" if self.transparent else "Transparent background"
         menu.add_command(label=trans_label, command=self._toggle_transparent)
-        ct_label = "✓ Click-through" if self.clickthrough else "Click-through"
-        menu.add_command(label=ct_label, command=self._toggle_clickthrough)
         ot_label = "✓ Always on top" if self.ontop else "Always on top"
         menu.add_command(label=ot_label, command=self._toggle_ontop)
         wc_label = "✓ Show window controls" if self.show_window_controls else "Show window controls"
@@ -1907,7 +1930,7 @@ class LabelManager:
             font_family=d.get("font_family"),
             font_size=d.get("font_size"),
             width=d.get("width"), height=d.get("height"),
-            clickthrough=d.get("clickthrough", False),
+            clickthrough=False,  # No longer offered; a saved flag left notes unclickable.
             ontop=d.get("ontop", True),
             images=d.get("images", []),
             opacity=d.get("opacity"),
