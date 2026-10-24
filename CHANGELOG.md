@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Remove Click-through from the note menu (Always on top is the show-over/hide-behind toggle). Notes saved with click-through on now reopen clickable instead of ignoring every click, including their close button.
+- Find pasted images again after the data folder moves: saved image paths are absolute, so a missing one is now looked up by file name in the current images folder.
+
 ## v1.3.0 - 2026-09-08
 
 - Keep caught Tk text-index errors inside Tcl so native note interactions cannot escape the event loop through the read-only guard.
