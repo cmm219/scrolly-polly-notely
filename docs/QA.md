@@ -18,6 +18,8 @@ Never substitute a live notes directory for a test fixture.
 | QA-08: deleting all text restored old content | Empty/whitespace commits; `test_commit_preserves_exact_text` |
 | QA-09: clipboard payloads truncated at 4096 bytes | Bounded EOF framing; fragmentation, Unicode, timeout, overflow and helper-port tests in `test_note_ipc.py` |
 | QA-10: duplicate dropped appearance and aliased images | Snapshot duplication with separate records/PhotoImages; `test_duplicate_preserves_all_properties_and_owns_images` |
+| QA-11: a click-through note ignored every click, even Close | Removed from the note menu, never restored on load; `test_note_menu_offers_always_on_top_not_clickthrough`, `test_saved_clickthrough_is_not_restored` |
+| QA-12: moving the data folder broke pasted images | Missing image records looked up by name in the images folder; `test_load_config_finds_images_after_data_folder_move` |
 
 Additional checks cover failed-transfer rollback, loss of a reusable source,
 autosave failure/retry, undo stack purity, kernel lock recovery after process

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.3.1 - 2026-10-29
 
 - Remove Click-through from the note menu (Always on top is the show-over/hide-behind toggle). Notes saved with click-through on now reopen clickable instead of ignoring every click, including their close button.
 - Find pasted images again after the data folder moves: saved image paths are absolute, so a missing one is now looked up by file name in the current images folder.
